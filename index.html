@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Report Generator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <script type="module" src="https://pyscript.net/releases/2025.8.1/core.js"></script>
+    <script type="module" src="js/script.js"></script>
+    <script type="py" src="py/main.py" config="config.json"></script>
+</head>
+<body>
+    <div class="loader-overlay">
+        <div class="loader"></div>
+    </div>
+
+    <header>
+        <h1>Sales Report Generator</h1>
+        <div class="darkmode-toggle">
+            <label class="switch">
+                <input type="checkbox" id="darkModeToggle">
+                <span class="slider"></span>
+            </label>
+            <span class="toggle-label">Dark Mode</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <section class="controls">
+            <div class="instructions">
+                <h2>Instructions</h2>
+                <p>Please ensure your input files (.xls or .xlsx) have the following structure:</p>
+                <p>- Headers should be in row 3.</p>
+                <p>- Columns: B = Area, C = Date, D = Customer Name, E = Invoice No, F = Product Type, G = Product Name, H = Quantity, I = Unit Price.</p>
+                
+                <h3>Sample Input Structure</h3>
+            </div>
+            <main>
+                <div class="table-container">
+                    <table class="excel-table" aria-describedby="noResults">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>A</th>
+                                <th>B</th>
+                                <th>C</th>
+                                <th>D</th>
+                                <th>E</th>
+                                <th>F</th>
+                                <th>G</th>
+                                <th>H</th>
+                                <th>I</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1</td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                            </tr>
+                            <tr>
+                                <td>2</td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                                <td></td>
+                            </tr>
+                            <tr>
+                                <td>3</td>
+                                <td></td>
+                                <td>Area</td>
+                                <td>Date</td>
+                                <td>Customer Name</td>
+                                <td>Invoice No</td>
+                                <td>Product Type</td>
+                                <td>Product Name</td>
+                                <td>Quantity</td>
+                                <td>Unit Price</td>
+                            </tr>
+                            <tr>
+                                <td>4</td>
+                                <td></td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                                <td>...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </main>
+            
+            <form id="extractForm">
+                <label for="files">Upload XLS/XLSX Files:</label>
+                <input type="file" id="files" multiple accept=".xls,.xlsx"><br><br>
+
+                <button type="submit" id="processButton" disabled>Process and Download</button>
+            </form>
+            
+            <div id="message"></div>
+        </section>
+    </div>
+
+    <button id="scrollTopBtn" aria-label="Scroll to top"></button>
+
+</body>
+</html>
