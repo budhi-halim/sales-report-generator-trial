@@ -4,6 +4,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 import io
 from datetime import datetime
 from pyscript import ffi, window, document
+import re
 
 # Section: Configuration Class
 # Holds all configurable settings for columns, formats, and processing rules
@@ -15,18 +16,19 @@ class ColumnConfig:
         self.key_map = {  # Mapping from column letters to data keys
             'B': 'area',
             'C': 'date',
-            'D': 'customer_name',
-            'E': 'invoice_no',
+            'D': 'invoice_no',
+            'E': 'customer_name',
             'F': 'product_type',
             'G': 'product_name',
             'H': 'quantity',
             'I': 'unit_price'
         }
         self.output_headers = [  # Headers for the output sales sheet
-            'Area', 'Tanggal', 'Periode', 'Customer', 'No. Faktur', 'Jenis', 'Produk', 'Jumlah',
+            'Area', 'Tanggal', 'Periode', 'No. Faktur', 'Customer', 'Jenis', 'Produk', 'Jumlah',
             'Harga Satuan', 'Total (IDR)', 'Kurs', 'Total (USD)'
         ]
-        self.preserve_upper = {'ABC', 'PT', 'CV', 'US'}  # Words to keep uppercase
+        self.preserve_upper_product = {'GMS', 'HVP', 'WCI', 'BBQ'}  # Words to keep uppercase for products
+        self.preserve_upper_customer = {'ABC'}  # Words to keep uppercase for customers
         self.area_replacements = {  # Area abbreviations to full names
             'Bdg': 'Bandung',
             'Bgr': 'Bogor',
@@ -38,7 +40,7 @@ class ColumnConfig:
         }
         self.idr_format_2 = r'_-"Rp"* #,##0.00_ ;_-"Rp"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-'
         self.idr_format_0 = r'_-"Rp"* #,##0_ ;_-"Rp"* -#,##0_ ;_-"Rp"* "-"??_ ;_-@_-'
-        self.usd_format_2 = r'_-"$"* #,##0.00_ ;_-"$"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-' 
+        self.usd_format_2 = r'_-"$"* #,##0.00_ ;_-"$"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-'
 
 # Section: Utility Functions
 # Helper functions for data processing
@@ -46,25 +48,38 @@ def col_to_index(col):
     # Converts column letter to zero-based index
     return ord(col.upper()) - ord('A')
 
-def proper_case(text, preserve_upper):
-    # Applies proper casing to text, preserving specific uppercase words
+def proper_case(text, preserve_upper=set()):
     if not text:
         return ''
-    words = str(text).strip().split()
-    processed = []
-    for word in words:
-        upper_word = word.upper()
-        if upper_word in preserve_upper:
-            processed.append(upper_word)
-        else:
-            processed.append(word.capitalize())
-    return ' '.join(processed)
+    # Split into alphanum words and non-alphanum separators
+    parts = re.findall(r'[a-zA-Z0-9]+|[^a-zA-Z0-9]+', str(text).strip())
+    processed_parts = []
+    for part in parts:
+        if re.match(r'^[a-zA-Z0-9]+$', part):  # word
+            # Split into letter and digit subparts
+            subparts = re.findall(r'[a-zA-Z]+|[0-9]+', part)
+            processed_sub = []
+            for sub in subparts:
+                if sub.isdigit():
+                    processed_sub.append(sub)
+                else:  # letters
+                    upper_sub = sub.upper()
+                    if upper_sub in preserve_upper:
+                        processed_sub.append(upper_sub)
+                    elif len(sub) <= 2:
+                        processed_sub.append(sub)  # preserve case
+                    else:
+                        processed_sub.append(sub.capitalize())
+            processed_parts.append(''.join(processed_sub))
+        else:  # separator
+            processed_parts.append(part)
+    return ''.join(processed_parts)
 
-def process_area(area, replacements, preserve_upper):
+def process_area(area, replacements):
     # Processes area string with replacements and casing
     if not area:
         return ''
-    area = proper_case(area.strip().split()[0], preserve_upper)
+    area = proper_case(area.strip().split()[0])
     return replacements.get(area, area)
 
 # Section: Structure Validation
@@ -129,7 +144,7 @@ def extract_data(buffer, filename, config):
                         val = pd.to_datetime(val)
                     except:
                         val = val  # Keep original if fail, validate later
-            elif col == 'E':
+            elif col == 'D':
                 val = str(val).rstrip('.0') if isinstance(val, float) else str(val)  # Force str, remove .0
             row_data[config.key_map[col]] = val
         data.append(row_data)
@@ -141,9 +156,9 @@ def process_data(combined_data, config):
     # Applies normalization and collects unique periods
     periods = set()
     for row in combined_data:
-        row['area'] = process_area(row['area'], config.area_replacements, config.preserve_upper)
-        row['customer_name'] = proper_case(row['customer_name'], config.preserve_upper)
-        row['product_name'] = proper_case(row['product_name'], config.preserve_upper)
+        row['area'] = process_area(row['area'], config.area_replacements)
+        row['customer_name'] = proper_case(row['customer_name'], config.preserve_upper_customer)
+        row['product_name'] = proper_case(row['product_name'], config.preserve_upper_product)
         date_value = row.get('date')
         if date_value and isinstance(date_value, datetime):
             periods.add(date_value.strftime('%Y-%m'))
@@ -151,6 +166,7 @@ def process_data(combined_data, config):
         row['product_type'] = str(row['product_type']) if row.get('product_type') else ''
         row['quantity'] = row['quantity'] if row.get('quantity') else ''
         row['unit_price'] = row['unit_price'] if row.get('unit_price') else ''
+    combined_data = sorted(combined_data, key=lambda x: x.get('date') or datetime.min)
     return sorted(list(periods)), combined_data
 
 # Section: Blank Check
@@ -161,8 +177,8 @@ def check_blanks(combined_data):
     key_to_col = {
         'area': 'A',
         'date': 'B',
-        'customer_name': 'D',
-        'invoice_no': 'E',
+        'invoice_no': 'D',
+        'customer_name': 'E',
         'product_type': 'F',
         'product_name': 'G',
         'quantity': 'H',
@@ -257,7 +273,7 @@ def process_files(file_datas):
     }
     for i, row in enumerate(combined_data):
         date_value = row.get('date') if isinstance(row.get('date'), datetime) else ''
-        sales_data_2d.append([row['area'], date_value, '', row['customer_name'], row['invoice_no'], row['product_type'], row['product_name'], row['quantity'], row['unit_price'], '', '', ''])
+        sales_data_2d.append([row['area'], date_value, '', row['invoice_no'], row['customer_name'], row['product_type'], row['product_name'], row['quantity'], row['unit_price'], '', '', ''])
         sales_row_formulas[i] = {
             3: f'=DATE(YEAR(B{i+2}), MONTH(B{i+2}), 1)',
             10: f'=H{i+2}*I{i+2}',
