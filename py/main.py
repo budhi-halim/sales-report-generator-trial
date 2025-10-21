@@ -5,6 +5,8 @@ import io
 from datetime import datetime
 from pyscript import ffi, window, document
 import re
+from collections import defaultdict
+from openpyxl.utils import get_column_letter
 
 # Section: Configuration Class
 # Holds all configurable settings for columns, formats, and processing rules
@@ -24,11 +26,30 @@ class ColumnConfig:
             'I': 'unit_price'
         }
         self.output_headers = [  # Headers for the output sales sheet
-            'Area', 'Tanggal', 'Periode', 'No. Faktur', 'Customer', 'Jenis', 'Produk', 'Jumlah',
-            'Harga Satuan', 'Total (IDR)', 'Kurs', 'Total (USD)'
+            'Area',
+            'Tanggal',
+            'Periode',
+            'No. Faktur',
+            'Customer',
+            'Jenis',
+            'Produk',
+            'Jumlah',
+            'Harga Satuan',
+            'Total (IDR)',
+            'Kurs',
+            'Total (USD)'
         ]
-        self.preserve_upper_product = {'GMS', 'HVP', 'WCI', 'BBQ'}  # Words to keep uppercase for products
-        self.preserve_upper_customer = {'ABC'}  # Words to keep uppercase for customers
+        self.preserve_upper_customer = {  # Words to keep uppercase for customers
+            'ABC',
+            'BAL'
+        }
+        self.preserve_upper_product = {  # Words to keep uppercase for products
+            'GMS',
+            'HVP',
+            'WCI',
+            'BBQ',
+            'KAN'
+        }
         self.area_replacements = {  # Area abbreviations to full names
             'Bdg': 'Bandung',
             'Bgr': 'Bogor',
@@ -40,7 +61,7 @@ class ColumnConfig:
         }
         self.idr_format_2 = r'_-"Rp"* #,##0.00_ ;_-"Rp"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-'
         self.idr_format_0 = r'_-"Rp"* #,##0_ ;_-"Rp"* -#,##0_ ;_-"Rp"* "-"??_ ;_-@_-'
-        self.usd_format_2 = r'_-"$"* #,##0.00_ ;_-"$"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-'
+        self.usd_format_2 = r'_-"$"* #,##0.00_ ;_-"$"* -#,##0.00_ ;_-"Rp"* "-"??_ ;_-@_-' 
 
 # Section: Utility Functions
 # Helper functions for data processing
@@ -213,6 +234,76 @@ def generate_table(sheet, headers, data_2d, ref, table_name, col_formats=None, r
     tab.tableStyleInfo = style
     sheet.add_table(tab)
 
+# Section: Group Sheet Generation
+# General function to generate group-based sheets (Customer/Area - IDR/USD/Qty)
+def generate_group_sheet(wb, group_key, unit, combined_data, period_columns, config):
+    sort_unit = 'IDR' if unit == 'USD' else unit
+    group_to_total = defaultdict(float)
+    for row in combined_data:
+        q = row['quantity']
+        if not isinstance(q, (float, int)):
+            continue
+        if sort_unit == 'Qty':
+            group_to_total[row[group_key]] += q
+        else:
+            u = row['unit_price']
+            if isinstance(u, (float, int)):
+                group_to_total[row[group_key]] += q * u
+    groups = sorted(group_to_total.keys(), key=lambda g: -group_to_total[g])
+    if group_key == 'customer_name':
+        sheet_name = f'Customer - {unit}'
+        header_label = 'Customer'
+        table_name = f'Customer_{unit}'
+        group_col = 'Customer'
+    elif group_key == 'area':
+        sheet_name = f'Area - {unit}'
+        header_label = 'Area'
+        table_name = f'Area_{unit}'
+        group_col = 'Area'
+    elif group_key == 'product_name':
+        sheet_name = f'Product - {unit}'
+        header_label = 'Product'
+        table_name = f'Product_{unit}'
+        group_col = 'Produk'
+    sheet = wb.create_sheet(sheet_name)
+    headers = [header_label] + [pc['label'] for pc in period_columns]
+    data_2d = [[group] + [''] * len(period_columns) for group in groups]
+    ref = f"A1:{get_column_letter(len(headers))}{len(groups)+1}"
+    col_formats = {}
+    col_formats[1] = '@'
+    if unit == 'IDR':
+        for col in range(2, len(headers)+1):
+            col_formats[col] = config.idr_format_2
+    elif unit == 'USD':
+        for col in range(2, len(headers)+1):
+            col_formats[col] = config.usd_format_2
+    elif unit == 'Qty':
+        for col in range(2, len(headers)+1):
+            col_formats[col] = '#,##0'
+    row_formulas = {}
+    for r_idx in range(len(groups)):
+        row_formulas[r_idx] = {}
+        r = r_idx + 2
+        for pc_idx, pc in enumerate(period_columns):
+            c = pc_idx + 2
+            if pc['type'] == 'month':
+                per = pc['periods'][0]
+                y, m = map(int, per.split('-'))
+                date_str = f'DATE({y},{m},1)'
+                if unit == 'IDR':
+                    sum_col = 'Total (IDR)'
+                elif unit == 'USD':
+                    sum_col = 'Total (USD)'
+                elif unit == 'Qty':
+                    sum_col = 'Jumlah'
+                formula = f'=SUMIFS(Sales_Data[{sum_col}], Sales_Data[{group_col}], $A{r}, Sales_Data[Periode], {date_str})'
+            else:
+                sum_cols = pc['sum_month_cols']
+                sum_str = ','.join(f'{sc}{r}' for sc in sum_cols)
+                formula = f'=SUM({sum_str})'
+            row_formulas[r_idx][c] = formula
+    generate_table(sheet, headers, data_2d, ref, table_name, col_formats, row_formulas)
+
 # Section: Main Processing Function
 # Orchestrates file processing and output
 def process_files(file_datas):
@@ -276,7 +367,7 @@ def process_files(file_datas):
         sales_data_2d.append([row['area'], date_value, '', row['invoice_no'], row['customer_name'], row['product_type'], row['product_name'], row['quantity'], row['unit_price'], '', '', ''])
         sales_row_formulas[i] = {
             3: f'=DATE(YEAR(B{i+2}), MONTH(B{i+2}), 1)',
-            10: f'=H{i+2}*I{i+2}',
+            10: f'=PRODUCT(H{i+2},I{i+2})',
             11: f'=VLOOKUP(TEXT(C{i+2}, "YYYY-MM"), \'Exchange Rate\'!A:B, 2, FALSE)',
             12: f'=J{i+2}/K{i+2}'
         }
@@ -287,6 +378,140 @@ def process_files(file_datas):
     exchange_data_2d = [[p, None] for p in sorted_periods]
     exchange_col_formats = {1: '@'}
     generate_table(sheet2, exchange_headers, exchange_data_2d, f"A1:B{len(sorted_periods) + 1}", "Exchange_Rate", exchange_col_formats)
+    # Build period_columns
+    years = sorted(set(p[:4] for p in sorted_periods))
+    period_columns = []
+    current_col = 2
+    all_month_letters = []
+    year_month_letters = defaultdict(list)
+    for year in years:
+        months_present = sorted(int(p[5:]) for p in sorted_periods if p[:4] == year)
+        for q in range(1, 5):
+            q_start = (q - 1) * 3 + 1
+            q_end = q_start + 2
+            q_months = [m for m in months_present if q_start <= m <= q_end]
+            if not q_months:
+                continue
+            q_letters = []
+            for m in q_months:
+                label = datetime(int(year), m, 1).strftime('%b %Y')
+                letter = get_column_letter(current_col)
+                period_columns.append({
+                    'label': label,
+                    'type': 'month',
+                    'periods': [f'{year}-{m:02d}'],
+                    'sum_month_cols': None
+                })
+                q_letters.append(letter)
+                all_month_letters.append(letter)
+                year_month_letters[year].append(letter)
+                current_col += 1
+            q_label = f'Q{q} {year}'
+            letter = get_column_letter(current_col)
+            period_columns.append({
+                'label': q_label,
+                'type': 'quarter',
+                'periods': [f'{year}-{mm:02d}' for mm in q_months],
+                'sum_month_cols': q_letters
+            })
+            current_col += 1
+        if months_present:
+            label = f'Total {year}'
+            letter = get_column_letter(current_col)
+            period_columns.append({
+                'label': label,
+                'type': 'year',
+                'periods': [f'{year}-{m:02d}' for m in months_present],
+                'sum_month_cols': year_month_letters[year]
+            })
+            current_col += 1
+    if sorted_periods:
+        label = 'Total'
+        letter = get_column_letter(current_col)
+        period_columns.append({
+            'label': label,
+            'type': 'grand',
+            'periods': sorted_periods,
+            'sum_month_cols': all_month_letters
+        })
+    generate_group_sheet(wb, 'customer_name', 'IDR', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'customer_name', 'USD', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'customer_name', 'Qty', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'area', 'IDR', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'area', 'USD', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'area', 'Qty', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'product_name', 'IDR', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'product_name', 'USD', combined_data, period_columns, config)
+    generate_group_sheet(wb, 'product_name', 'Qty', combined_data, period_columns, config)
+    # Summary
+    period_labels = []
+    current_row_idx = 0
+    all_month_row_nums = []
+    year_month_row_nums = defaultdict(list)
+    row_to_sum_rows = {}
+    for year in years:
+        months_present = sorted(int(p[5:]) for p in sorted_periods if p[:4] == year)
+        has_year = False
+        for q in range(1, 5):
+            q_start = (q - 1) * 3 + 1
+            q_end = q_start + 2
+            q_months = [m for m in months_present if q_start <= m <= q_end]
+            if not q_months:
+                continue
+            has_year = True
+            q_month_rows = []
+            for m in q_months:
+                label = datetime(int(year), m, 1).strftime('%b %Y')
+                period_labels.append(label)
+                row_num = current_row_idx + 2
+                q_month_rows.append(row_num)
+                all_month_row_nums.append(row_num)
+                year_month_row_nums[year].append(row_num)
+                current_row_idx += 1
+            q_label = f'Q{q} {year}'
+            period_labels.append(q_label)
+            q_row_num = current_row_idx + 2
+            row_to_sum_rows[q_row_num] = q_month_rows
+            current_row_idx += 1
+        if has_year:
+            y_label = f'Total {year}'
+            period_labels.append(y_label)
+            y_row_num = current_row_idx + 2
+            row_to_sum_rows[y_row_num] = year_month_row_nums[year]
+            current_row_idx += 1
+    if sorted_periods:
+        grand_label = 'Total'
+        period_labels.append(grand_label)
+        grand_row_num = current_row_idx + 2
+        row_to_sum_rows[grand_row_num] = all_month_row_nums
+    sheet9 = wb.create_sheet('Summary')
+    headers = ['Period', 'IDR', 'USD', 'Qty']
+    data_2d = [[label] + [''] * 3 for label in period_labels]
+    ref = f"A1:D{len(period_labels) + 1}"
+    table_name = 'Summary'
+    col_formats = {1: '@', 2: config.idr_format_2, 3: config.usd_format_2, 4: '#,##0'}
+    row_formulas = {}
+    for r_idx in range(len(period_labels)):
+        pc = period_columns[r_idx] if r_idx < len(period_columns) else None
+        r = r_idx + 2
+        row_formulas[r_idx] = {}
+        if pc and pc['type'] == 'month':
+            per = pc['periods'][0]
+            y, m = map(int, per.split('-'))
+            date_str = f'DATE({y},{m},1)'
+            row_formulas[r_idx][2] = f'=SUMIF(Sales_Data[Periode], {date_str}, Sales_Data[Total (IDR)])'
+            row_formulas[r_idx][3] = f'=SUMIF(Sales_Data[Periode], {date_str}, Sales_Data[Total (USD)])'
+            row_formulas[r_idx][4] = f'=SUMIF(Sales_Data[Periode], {date_str}, Sales_Data[Jumlah])'
+        else:
+            sum_rows = row_to_sum_rows.get(r, [])
+            if sum_rows:
+                sum_str_b = ','.join(f'B{sr}' for sr in sum_rows)
+                row_formulas[r_idx][2] = f'=SUM({sum_str_b})'
+                sum_str_c = ','.join(f'C{sr}' for sr in sum_rows)
+                row_formulas[r_idx][3] = f'=SUM({sum_str_c})'
+                sum_str_d = ','.join(f'D{sr}' for sr in sum_rows)
+                row_formulas[r_idx][4] = f'=SUM({sum_str_d})'
+    generate_table(sheet9, headers, data_2d, ref, table_name, col_formats, row_formulas)
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)

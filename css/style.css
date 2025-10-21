@@ -407,7 +407,6 @@ body.dark .loader-overlay {
 /* Loader animation */
 .loader {
   font-weight: bold;
-  font-family: monospace !important;
   font-size: 30px;
   line-height: 1.2em;
   letter-spacing: var(--loader-width);
