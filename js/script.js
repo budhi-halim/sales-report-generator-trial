@@ -59,6 +59,14 @@ document.getElementById('extractForm').addEventListener('submit', async function
         return;
     }
 
+    // Show processing modal
+    const processingOverlay = document.getElementById('processingOverlay');
+    const processingModal = document.getElementById('processingModal');
+    const processingText = document.getElementById('processingText');
+    processingText.textContent = 'Processing...';
+    processingOverlay.style.display = 'block';
+    processingModal.style.display = 'flex';
+
     let fileInfos = [];
     for (let file of files) {
         const arrayBuf = await file.arrayBuffer();
@@ -68,24 +76,49 @@ document.getElementById('extractForm').addEventListener('submit', async function
     }
 
     try {
-        const result = window.process_files(fileInfos);
-        displayMessage(result.message, result.type || 'success');
-        if (result.buffer) {
-            const js_buffer = new Uint8Array(result.buffer);
-            const blob = new Blob([js_buffer], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            const today = new Date();
-            const dd = String(today.getDate()).padStart(2, '0');
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const yyyy = today.getFullYear();
-            a.download = `Sales Report ${dd}-${mm}-${yyyy}.xlsx`;
-            a.click();
-            URL.revokeObjectURL(url);
-        }
+        const result = await window.process_files(fileInfos);
+        // Fade out spinner and text
+        const spinner = document.querySelector('.processing-spinner');
+        const text = processingText;
+        spinner.style.opacity = '0';
+        text.style.opacity = '0';
+        
+        setTimeout(() => {
+            const tick = document.querySelector('.tick-mark');
+            tick.style.opacity = '1';
+            text.textContent = 'Processing complete.';
+            text.style.opacity = '1';
+
+            setTimeout(() => {
+                // Hide modal after brief moment
+                processingOverlay.style.display = 'none';
+                processingModal.style.display = 'none';
+                spinner.style.opacity = '1'; // Reset for next use
+                text.style.opacity = '1'; // Reset
+                tick.style.opacity = '0';
+
+                displayMessage(result.message, result.type || 'success');
+                if (result.buffer) {
+                    const js_buffer = new Uint8Array(result.buffer);
+                    const blob = new Blob([js_buffer], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    const today = new Date();
+                    const dd = String(today.getDate()).padStart(2, '0');
+                    const mm = String(today.getMonth() + 1).padStart(2, '0');
+                    const yyyy = today.getFullYear();
+                    a.download = `Sales Report ${dd}-${mm}-${yyyy}.xlsx`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }
+            }, 1500); // Brief moment: 1.5 seconds
+        }, 300); // Fade transition time
     } catch (error) {
         console.error(error);
+        // Hide modal on error
+        processingOverlay.style.display = 'none';
+        processingModal.style.display = 'none';
         displayMessage('An error occurred during processing.', 'error');
     }
 });

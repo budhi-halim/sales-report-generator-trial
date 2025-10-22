@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sales Report Generator</title>
+    <title>Sales Report</title>
     <link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
     <script type="module" src="https://pyscript.net/releases/2025.8.1/core.js"></script>
@@ -15,8 +15,17 @@
         <div class="loader"></div>
     </div>
 
+    <div id="processingOverlay" class="processing-overlay"></div>
+    <div id="processingModal" class="processing-modal">
+        <div class="icon-container">
+            <div class="processing-spinner"></div>
+            <div class="tick-mark"></div>
+        </div>
+        <p id="processingText">Processing...</p>
+    </div>
+
     <header>
-        <h1>Sales Report Generator</h1>
+        <h1>Sales Report</h1>
         <div class="darkmode-toggle">
             <label class="switch">
                 <input type="checkbox" id="darkModeToggle">
