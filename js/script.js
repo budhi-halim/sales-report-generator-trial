@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Section: PyScript Readiness
 // Hides loader and enables button when PyScript is ready
-window.addEventListener('py:ready', () => {
+window.addEventListener('py:all-done', () => {
     const loaderOverlay = document.querySelector('.loader-overlay');
     loaderOverlay.style.display = 'none';
     const processButton = document.getElementById('processButton');
