@@ -7,6 +7,7 @@ from pyscript import ffi, window, document
 import re
 from collections import defaultdict
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
 
 # Section: Configuration Class
 # Holds all configurable settings for columns, formats, and processing rules
@@ -41,7 +42,8 @@ class ColumnConfig:
         ]
         self.preserve_upper_customer = {  # Words to keep uppercase for customers
             'ABC',
-            'BAL'
+            'BAL',
+            'TSG'
         }
         self.preserve_upper_product = {  # Words to keep uppercase for products
             'GMS',
@@ -214,21 +216,27 @@ def check_blanks(combined_data):
 
 # Section: Table Generation
 # General function to generate Excel table from 2D data
-def generate_table(sheet, headers, data_2d, ref, table_name, col_formats=None, row_formulas=None):
+def generate_table(sheet, headers, data_2d, table_name, col_formats=None, row_formulas=None, start_row=1, start_col=1):
     # Writes headers and data to sheet, applies formats/formulas, creates table
-    for c, header in enumerate(headers, 1):
-        sheet.cell(1, c).value = header
+    for rel_c, header in enumerate(headers, 1):
+        c = start_col + rel_c - 1
+        sheet.cell(start_row, c).value = header
     for r_idx, row_data in enumerate(data_2d, 0):
-        r = r_idx + 2  # Data starts at row 2
-        for c, val in enumerate(row_data, 1):
+        r = start_row + r_idx + 1
+        for rel_c, val in enumerate(row_data, 1):
+            c = start_col + rel_c - 1
             sheet.cell(r, c).value = val
-            if col_formats and col_formats.get(c):
-                sheet.cell(r, c).number_format = col_formats[c]
+            if col_formats and rel_c in col_formats:
+                sheet.cell(r, c).number_format = col_formats[rel_c]
         if row_formulas and row_formulas.get(r_idx):
-            for col_idx, formula in row_formulas[r_idx].items():
-                sheet.cell(r, col_idx).value = formula
-                if col_formats and col_formats.get(col_idx):
-                    sheet.cell(r, col_idx).number_format = col_formats[col_idx]
+            for rel_col, formula in row_formulas[r_idx].items():
+                c = start_col + rel_col - 1
+                sheet.cell(r, c).value = formula
+                if col_formats and rel_col in col_formats:
+                    sheet.cell(r, c).number_format = col_formats[rel_col]
+    last_col = start_col + len(headers) - 1
+    last_row = start_row + len(data_2d)
+    ref = f"{get_column_letter(start_col)}{start_row}:{get_column_letter(last_col)}{last_row}"
     tab = Table(displayName=table_name, ref=ref)
     style = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
     tab.tableStyleInfo = style
@@ -268,7 +276,6 @@ def generate_group_sheet(wb, group_key, unit, combined_data, period_columns, con
     sheet = wb.create_sheet(sheet_name)
     headers = [header_label] + [pc['label'] for pc in period_columns]
     data_2d = [[group] + [''] * len(period_columns) for group in groups]
-    ref = f"A1:{get_column_letter(len(headers))}{len(groups)+1}"
     col_formats = {}
     col_formats[1] = '@'
     if unit == 'IDR':
@@ -302,7 +309,91 @@ def generate_group_sheet(wb, group_key, unit, combined_data, period_columns, con
                 sum_str = ','.join(f'{sc}{r}' for sc in sum_cols)
                 formula = f'=SUM({sum_str})'
             row_formulas[r_idx][c] = formula
-    generate_table(sheet, headers, data_2d, ref, table_name, col_formats, row_formulas)
+    generate_table(sheet, headers, data_2d, table_name, col_formats, row_formulas)
+    end_row = 1 + len(data_2d)
+    total_row = end_row + 2
+    sheet.cell(total_row, 1).value = 'Total'
+    sheet.cell(total_row, 1).font = Font(bold=True)
+    for rel_c in range(2, len(headers)+1):
+        c = 1 + rel_c - 1
+        sum_formula = f'=SUM({get_column_letter(c)}2:{get_column_letter(c)}{end_row})'
+        sheet.cell(total_row, c).value = sum_formula
+        if col_formats and rel_c in col_formats:
+            sheet.cell(total_row, c).number_format = col_formats[rel_c]
+        sheet.cell(total_row, c).font = Font(bold=True)
+
+def compute_yearly_sort_totals(combined_data, group_key, unit):
+    sort_unit = 'IDR' if unit == 'USD' else unit
+    yearly_totals = defaultdict(lambda: defaultdict(float))  # year -> group -> total
+    for row in combined_data:
+        date = row.get('date')
+        if not isinstance(date, datetime):
+            continue
+        year = str(date.year)
+        group = row[group_key]
+        q = row['quantity']
+        if not isinstance(q, (int, float)):
+            continue
+        if sort_unit == 'Qty':
+            yearly_totals[year][group] += q
+        else:  # IDR or USD (using IDR)
+            u = row['unit_price']
+            if isinstance(u, (int, float)):
+                yearly_totals[year][group] += q * u
+    return yearly_totals
+
+def generate_yearly_group_sheet(wb, group_key, unit, combined_data, period_columns, config, year_to_col_letter):
+    if group_key == 'customer_name':
+        sheet_name = f'Customer - Yearly - {unit}'
+        header_label = 'Customer'
+        table_base = f'Customer_{unit}'
+        orig_sheet = f'Customer - {unit}'
+    elif group_key == 'area':
+        sheet_name = f'Area - Yearly - {unit}'
+        header_label = 'Area'
+        table_base = f'Area_{unit}'
+        orig_sheet = f'Area - {unit}'
+    elif group_key == 'product_name':
+        sheet_name = f'Product - Yearly - {unit}'
+        header_label = 'Product'
+        table_base = f'Product_{unit}'
+        orig_sheet = f'Product - {unit}'
+    sheet = wb.create_sheet(sheet_name)
+    yearly_totals = compute_yearly_sort_totals(combined_data, group_key, unit)
+    all_groups = sorted(set(row[group_key] for row in combined_data if row[group_key]))
+    col_formats = {1: '@'}
+    if unit == 'IDR':
+        col_formats[2] = config.idr_format_2
+    elif unit == 'USD':
+        col_formats[2] = config.usd_format_2
+    elif unit == 'Qty':
+        col_formats[2] = '#,##0'
+    current_start_col = 1
+    for year in sorted(yearly_totals.keys()):
+        year_totals = yearly_totals[year]
+        groups = sorted(all_groups, key=lambda g: -year_totals.get(g, 0))
+        headers = [header_label, f'Total {year}']
+        data_2d = [[g, ''] for g in groups]
+        table_name = f'{table_base}_{year}'
+        row_formulas = {}
+        for r_idx in range(len(groups)):
+            row_formulas[r_idx] = {}
+            r = r_idx + 2
+            formula = f"=INDEX('{orig_sheet}'!{year_to_col_letter[year]}:{year_to_col_letter[year]}, MATCH({get_column_letter(current_start_col)}{r}, '{orig_sheet}'!A:A, 0))"
+            row_formulas[r_idx][2] = formula
+        generate_table(sheet, headers, data_2d, table_name, col_formats, row_formulas, start_col=current_start_col)
+        end_row = 1 + len(data_2d)
+        total_row = end_row + 2
+        sheet.cell(total_row, current_start_col).value = 'Total'
+        sheet.cell(total_row, current_start_col).font = Font(bold=True)
+        for rel_c in range(2, len(headers)+1):
+            c = current_start_col + rel_c - 1
+            sum_formula = f'=SUM({get_column_letter(c)}2:{get_column_letter(c)}{end_row})'
+            sheet.cell(total_row, c).value = sum_formula
+            if col_formats and rel_c in col_formats:
+                sheet.cell(total_row, c).number_format = col_formats[rel_c]
+            sheet.cell(total_row, c).font = Font(bold=True)
+        current_start_col += 3
 
 # Section: Main Processing Function
 # Orchestrates file processing and output
@@ -371,13 +462,13 @@ def process_files(file_datas):
             11: f'=VLOOKUP(TEXT(C{i+2}, "YYYY-MM"), \'Exchange Rate\'!A:B, 2, FALSE)',
             12: f'=J{i+2}/K{i+2}'
         }
-    generate_table(sheet1, config.output_headers, sales_data_2d, f"A1:L{len(combined_data) + 1}", "Sales_Data", sales_col_formats, sales_row_formulas)
+    generate_table(sheet1, config.output_headers, sales_data_2d, "Sales_Data", sales_col_formats, sales_row_formulas)
     sheet2 = wb.create_sheet('Exchange Rate')
     # Build 2D data for exchange (Python-computed periods)
     exchange_headers = ['Period', 'Rate']
     exchange_data_2d = [[p, None] for p in sorted_periods]
     exchange_col_formats = {1: '@'}
-    generate_table(sheet2, exchange_headers, exchange_data_2d, f"A1:B{len(sorted_periods) + 1}", "Exchange_Rate", exchange_col_formats)
+    generate_table(sheet2, exchange_headers, exchange_data_2d, "Exchange_Rate", exchange_col_formats)
     # Build period_columns
     years = sorted(set(p[:4] for p in sorted_periods))
     period_columns = []
@@ -434,15 +525,16 @@ def process_files(file_datas):
             'periods': sorted_periods,
             'sum_month_cols': all_month_letters
         })
-    generate_group_sheet(wb, 'customer_name', 'IDR', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'customer_name', 'USD', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'customer_name', 'Qty', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'area', 'IDR', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'area', 'USD', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'area', 'Qty', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'product_name', 'IDR', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'product_name', 'USD', combined_data, period_columns, config)
-    generate_group_sheet(wb, 'product_name', 'Qty', combined_data, period_columns, config)
+    year_to_col_letter = {}
+    for idx, pc in enumerate(period_columns):
+        if pc['type'] == 'year':
+            year = pc['label'].split()[1]
+            col_idx = idx + 2
+            year_to_col_letter[year] = get_column_letter(col_idx)
+    for group_key in ['customer_name', 'area', 'product_name']:
+        for unit in ['IDR', 'USD', 'Qty']:
+            generate_group_sheet(wb, group_key, unit, combined_data, period_columns, config)
+            generate_yearly_group_sheet(wb, group_key, unit, combined_data, period_columns, config, year_to_col_letter)
     # Summary
     period_labels = []
     current_row_idx = 0
@@ -487,7 +579,6 @@ def process_files(file_datas):
     sheet9 = wb.create_sheet('Summary')
     headers = ['Period', 'IDR', 'USD', 'Qty']
     data_2d = [[label] + [''] * 3 for label in period_labels]
-    ref = f"A1:D{len(period_labels) + 1}"
     table_name = 'Summary'
     col_formats = {1: '@', 2: config.idr_format_2, 3: config.usd_format_2, 4: '#,##0'}
     row_formulas = {}
@@ -511,7 +602,7 @@ def process_files(file_datas):
                 row_formulas[r_idx][3] = f'=SUM({sum_str_c})'
                 sum_str_d = ','.join(f'D{sr}' for sr in sum_rows)
                 row_formulas[r_idx][4] = f'=SUM({sum_str_d})'
-    generate_table(sheet9, headers, data_2d, ref, table_name, col_formats, row_formulas)
+    generate_table(sheet9, headers, data_2d, table_name, col_formats, row_formulas)
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
